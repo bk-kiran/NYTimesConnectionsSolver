@@ -1,36 +1,130 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# NYT Connections Solver
 
-## Getting Started
+AI-powered solver for NYT Connections puzzles using semantic embeddings and GPT-4.
 
-First, run the development server:
+## Features
+
+- 🧩 Fetch today's NYT Connections puzzle
+- 🤖 AI-powered solving using:
+  - Semantic similarity (embeddings) - Fast and free
+  - GPT-4 - More accurate with reasoning
+- 🎯 Visual word grid with prediction highlighting
+- 📊 Confidence scores and explanations
+- 🚫 Exclude incorrect predictions
+- 🔄 Re-solve with exclusions
+
+## Prerequisites
+
+- Node.js 18+ and npm
+- Python 3.8+
+- OpenAI API key (optional, for GPT-4 solver)
+
+## Setup Instructions
+
+### 1. Install Node.js Dependencies
+
+```bash
+npm install
+```
+
+### 2. Install Python Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+**Note:** The first time you run the embeddings solver, it will download the `all-mpnet-base-v2` model (~420MB). This is a one-time download.
+
+### 3. Configure Environment Variables
+
+Create a `.env.local` file in the root directory:
+
+```bash
+OPENAI_API_KEY=your_openai_api_key_here
+```
+
+**Note:** The OpenAI API key is only required if you want to use the GPT-4 solver. The embeddings solver works without it.
+
+### 4. Start the Development Server
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The app will be available at `http://localhost:3000`
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Usage
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. **Fetch Puzzle**: Click "Fetch Today's Puzzle" to load today's NYT Connections puzzle
+2. **View Words**: The 16 words will be displayed in a 4x4 grid
+3. **Solve**: Click "Solve Puzzle" to get AI predictions
+   - Toggle "Use GPT-4" for more accurate results (requires API key)
+4. **Review Predictions**: 
+   - Top prediction is highlighted in the word grid
+   - View all predictions with confidence scores
+   - Exclude incorrect predictions
+5. **Re-solve**: Click "Re-solve Without Excluded" to get new predictions
 
-## Learn More
+## Project Structure
 
-To learn more about Next.js, take a look at the following resources:
+```
+/
+├── app/
+│   ├── api/
+│   │   ├── fetch-puzzle/    # API route to fetch puzzle
+│   │   └── solve/            # API route to solve puzzle
+│   ├── page.tsx              # Main application page
+│   └── layout.tsx            # Root layout with Toaster
+├── components/
+│   ├── PuzzleFetcher.tsx    # Component to fetch puzzle
+│   ├── WordGrid.tsx         # Component to display words
+│   ├── Solver.tsx           # Component to solve puzzle
+│   ├── LoadingSkeletons.tsx # Loading placeholders
+│   └── Toaster.tsx          # Toast notifications
+└── python/
+    ├── scraper_api.py        # Fetch puzzle from NYT API
+    ├── solver_embeddings.py  # Embeddings-based solver
+    ├── solver_llm.py         # GPT-4 solver
+    └── solver_hybrid.py      # Combined solver
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Troubleshooting
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### Python Script Not Found
+If you get "Python script not found" errors:
+- Ensure Python 3 is installed: `python3 --version`
+- Ensure all Python dependencies are installed: `pip install -r requirements.txt`
 
-## Deploy on Vercel
+### OpenAI API Errors
+If GPT-4 solver fails:
+- Check your API key in `.env.local`
+- Ensure you have credits in your OpenAI account
+- Check rate limits
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### Model Download Issues
+If the embeddings model fails to download:
+- Check your internet connection
+- The model is downloaded to `~/.cache/huggingface/` on first use
+- You can manually download it if needed
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Development
+
+### Run in Development Mode
+```bash
+npm run dev
+```
+
+### Build for Production
+```bash
+npm run build
+npm start
+```
+
+### Lint Code
+```bash
+npm run lint
+```
+
+## License
+
+MIT
