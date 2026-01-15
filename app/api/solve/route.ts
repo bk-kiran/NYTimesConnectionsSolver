@@ -17,12 +17,15 @@ interface Prediction {
   explanation?: string | null;
   method: string;
   sources?: string[];
+  difficulty?: string | null;  // yellow, green, blue, purple
 }
 
 interface SolveResponse {
   success: boolean;
-  predictions?: Prediction[];
+  top_solution?: Prediction[];  // Guaranteed 4 groups
+  all_predictions?: Prediction[];  // All predictions for exploration
   solve_time_ms?: number;
+  all_words_covered?: boolean;  // Whether solution uses all 16 words
   error?: string;
 }
 
@@ -32,6 +35,14 @@ export async function POST(request: NextRequest) {
     const body: SolveRequest = await request.json();
     
     const { words, use_llm = false, exclude_words = [] } = body;
+    
+    // Debug logging
+    console.log('[API] Solve request received:', {
+      wordsCount: words?.length,
+      use_llm,
+      excludeWordsCount: exclude_words?.length,
+      hasApiKey: !!process.env.OPENAI_API_KEY,
+    });
     
     // Validate input
     if (!words || !Array.isArray(words) || words.length !== 16) {
@@ -48,6 +59,7 @@ export async function POST(request: NextRequest) {
     const apiKey = process.env.OPENAI_API_KEY || '';
     
     if (use_llm && !apiKey) {
+      console.error('[API] GPT-4 requested but no API key found');
       return NextResponse.json(
         {
           success: false,
@@ -55,6 +67,12 @@ export async function POST(request: NextRequest) {
         },
         { status: 400 }
       );
+    }
+    
+    if (use_llm) {
+      console.log('[API] GPT-4 mode enabled, API key present');
+    } else {
+      console.log('[API] Embeddings-only mode');
     }
     
     // Create a temporary Python script file to avoid escaping issues
@@ -94,15 +112,13 @@ use_llm = input_data.get('use_llm', False)
 exclude_words = input_data.get('exclude_words', [])
 api_key = os.getenv('OPENAI_API_KEY', '')
 
-# Suppress print statements by redirecting stdout temporarily
-import io
-import contextlib
+# Debug logging (to stderr so it doesn't break JSON output)
+import sys
+print(f"DEBUG: use_llm={use_llm}, api_key_length={len(api_key) if api_key else 0}", file=sys.stderr)
 
-# Capture and suppress print output
-f = io.StringIO()
-with contextlib.redirect_stdout(f), contextlib.redirect_stderr(f):
-    # Solve the puzzle
-    result = solve_puzzle(words, use_llm=use_llm, api_key=api_key if use_llm else None)
+# Solve the puzzle (print statements will go to stderr, JSON to stdout)
+# We'll capture stderr separately to see debug info
+result = solve_puzzle(words, use_llm=use_llm, api_key=api_key if use_llm else None)
 
 # Filter out excluded words if provided
 if exclude_words:
@@ -156,7 +172,12 @@ sys.stdout.flush()
         });
         
         pythonProcess.stderr.on('data', (data) => {
-          stderr += data.toString();
+          const stderrData = data.toString();
+          stderr += stderrData;
+          // Log debug info to console (but don't include in error)
+          if (stderrData.includes('DEBUG:') || stderrData.includes('Running LLM') || stderrData.includes('LLM solver') || stderrData.includes('use_llm=')) {
+            console.log('[Python Debug]', stderrData.trim());
+          }
         });
         
         // Set 60 second timeout (embeddings + LLM can take time)
@@ -216,18 +237,41 @@ sys.stdout.flush()
       // Parse Python output
       const solverResult = JSON.parse(jsonLine);
       
+      // Validate top_solution
+      const topSolution = solverResult.top_solution || solverResult.predictions?.slice(0, 4) || [];
+      const allPredictions = solverResult.all_predictions || solverResult.predictions || [];
+      const allWordsCovered = solverResult.all_words_covered !== undefined 
+        ? solverResult.all_words_covered 
+        : (topSolution.length === 4);
+      
+      // Validate that top solution has 4 groups
+      if (topSolution.length !== 4) {
+        console.warn(`Warning: Top solution has ${topSolution.length} groups, expected 4`);
+      }
+      
       // Format response
       const response: SolveResponse = {
         success: true,
-        predictions: solverResult.predictions.map((pred: any) => ({
+        top_solution: topSolution.map((pred: any) => ({
           words: pred.words,
           confidence: pred.confidence,
           category: pred.category || null,
           explanation: pred.explanation || null,
           method: pred.method,
           sources: pred.sources || [pred.method],
+          difficulty: pred.difficulty || null,
+        })),
+        all_predictions: allPredictions.map((pred: any) => ({
+          words: pred.words,
+          confidence: pred.confidence,
+          category: pred.category || null,
+          explanation: pred.explanation || null,
+          method: pred.method,
+          sources: pred.sources || [pred.method],
+          difficulty: pred.difficulty || null,
         })),
         solve_time_ms: solverResult.solve_time_ms,
+        all_words_covered: allWordsCovered,
       };
       
       return NextResponse.json(response);

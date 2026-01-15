@@ -100,6 +100,7 @@ export default function Home() {
 
             {/* Solver Component */}
             <Solver
+              key={puzzleData.puzzle_id}
               words={puzzleData.words}
               puzzleId={puzzleData.puzzle_id}
               puzzleDate={puzzleData.date}

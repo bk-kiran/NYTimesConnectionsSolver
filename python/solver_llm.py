@@ -8,15 +8,17 @@ import json
 import openai
 from typing import List, Dict, Any, Optional
 import time
+import sys
 
 
-def solve_with_llm(words: List[str], api_key: str) -> List[Dict[str, Any]]:
+def solve_with_llm(words: List[str], api_key: str, wordplay_findings: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """
     Solve NYT Connections puzzle using GPT-4.
     
     Args:
         words: List of 16 puzzle words
         api_key: OpenAI API key
+        wordplay_findings: Optional wordplay analysis results
         
     Returns:
         List of 4 groups, each with:
@@ -35,57 +37,155 @@ def solve_with_llm(words: List[str], api_key: str) -> List[Dict[str, Any]]:
     # Set up OpenAI client
     client = openai.OpenAI(api_key=api_key)
     
-    # System prompt explaining Connections rules
-    system_prompt = """You are an expert at solving NYT Connections puzzles.
+    # System prompt explaining Connections rules with detailed category types
+    category_examples = """
+CATEGORY TYPES (in order of difficulty):
 
-Rules:
-- There are 4 groups of 4 words each (16 words total)
-- Each group shares a common theme or connection
-- Categories can be:
-  * Semantic: Words that share a meaning (e.g., synonyms, related concepts)
-  * Wordplay: Words that share a linguistic pattern (e.g., all start with same letter, all compound words)
-  * Fill-in-blank: Words that complete a phrase (e.g., "SILENT ___")
-  * Compounds: Words that can be combined with another word
-- Difficulty levels: Yellow (easiest), Green, Blue, Purple (trickiest)
-- Think step-by-step to identify the connections
+YELLOW (Easiest - Direct semantic):
+- Clear categorical relationships
+- Example: "GARDENING TOOLS: rake, shovel, spade, hose"
+- Example: "SYNONYMS FOR FAST: quick, rapid, speedy, swift"
+- High semantic similarity, obvious connection
 
-Your task is to analyze the 16 words and identify the 4 groups of 4 words each.
-For each group, provide:
-1. The 4 words that belong together
-2. The category/theme name
-3. An explanation of why they're connected
-4. Your confidence level (0.0-1.0) for this grouping
+GREEN (Moderate - Thematic):
+- Shared characteristics or themes
+- Example: "THINGS THAT ARE RED: apple, rose, fire truck, tomato"
+- Example: "WINTER WORDS: snow, ice, cold, frost"
+- Medium semantic similarity, thematic grouping
 
-Return your response as a JSON array with 4 objects, one for each group."""
+BLUE (Tricky - Wordplay or fill-in-blank):
+- Fill in the blank: "_____ ring: boxing, wedding, onion, earring"
+- Compound words: Words that go before/after common word
+- Example: "WORDS BEFORE 'BALL': basket, foot, snow, eye"
+- Example: "WORDS AFTER 'FIRE': place, fighter, works, escape"
+- Lower semantic similarity, pattern-based
 
-    # User prompt with the words
-    user_prompt = f"""Analyze these 16 words and find the 4 groups of 4 words each:
+PURPLE (Hardest - Obscure wordplay):
+- Hidden patterns, homophones, word fragments
+- Words split into parts: "JACK + AL = JACKAL"
+- Rhymes, anagrams, or cultural references
+- Example: "WORDS FORMED BY TWO MEN'S NAMES: Jackal (Jack+Al), Patron (Pat+Ron), Levitate (Levi+Tate), Melted (Mel+Ted)"
+- Very low semantic similarity, requires wordplay analysis
+"""
 
-{', '.join(words)}
+    system_prompt = f"""You are an expert at solving NYT Connections puzzles.
+
+CRITICAL: Purple categories often use WORDPLAY, not just meaning:
+- Names hidden in words (JACKAL = JACK + AL)
+- Fill-in-blank patterns (___ button, ___ code)
+- Homophones or rhymes
+- Word fragments or compound words
+
+For each word, ask:
+1. Can it be split into two parts that are names/words?
+2. Does it fit a ___ [WORD] or [WORD] ___ pattern?
+3. Is there wordplay beyond literal meaning?
+
+{category_examples}
 
 Think step-by-step:
-1. Look for obvious semantic connections (synonyms, related concepts)
-2. Check for wordplay patterns (shared prefixes, suffixes, compound words)
-3. Consider fill-in-blank patterns
-4. Identify the trickiest connections last
+1. List all 16 words
+2. Check each word for wordplay patterns FIRST (names, compounds, fill-in-blank)
+3. Look for fill-in-blank patterns
+4. Find name combinations (e.g., LEVITATE = LEVI + TATE)
+5. Then find semantic groups
+6. Rank by confidence (Purple is usually lowest confidence, Yellow highest)
 
-Return a JSON object with a "groups" key containing an array of exactly 4 groups in this format:
+CRITICAL RULES:
+- There are EXACTLY 4 groups of 4 words each (16 words total)
+- Each word is used EXACTLY ONCE across all 4 groups
+- Each group shares a STRONG, CLEAR connection
+- Be skeptical of weak connections - lower confidence if unsure
+- Purple categories are often the trickiest - look for wordplay first!"""
+
+    # User prompt with the words and wordplay analysis
+    wordplay_section = ""
+    if wordplay_findings:
+        try:
+            from python.wordplay_detector import format_wordplay_findings
+            formatted = format_wordplay_findings(wordplay_findings)
+            if formatted and formatted != "No obvious wordplay patterns detected.":
+                wordplay_section = f"""
+
+WORDPLAY ANALYSIS DETECTED:
+{formatted}
+
+Consider these patterns when solving!"""
+        except (ImportError, Exception) as e:
+            # Wordplay detector not available or error, skip
+            pass
+    
+    user_prompt = f"""Solve this NYT Connections puzzle by finding exactly 4 groups of 4 words each.
+
+Words: {', '.join(words)}
+
+{wordplay_section}
+
+Rules:
+- Find exactly 4 groups
+- Each group has exactly 4 words  
+- Every word used exactly once
+- Groups should have clear connections
+
+Example of a tricky purple category:
+Words: JACKAL, LEVITATE, MELTED, PATRON
+Answer: "WORDS FORMED BY TWO MEN'S NAMES"
+- JACKAL = JACK + AL
+- LEVITATE = LEVI + TATE  
+- MELTED = MEL + TED
+- PATRON = PAT + RON
+
+Think step-by-step:
+1. Check for wordplay FIRST (names in words, fill-in-blank, compounds)
+2. Find thematic connections (colors, tools, types of X)
+3. Find semantic connections (synonyms, related concepts)
+4. Verify: All 16 words used exactly once across 4 groups
+
+Return JSON:
 {{
+  "reasoning": {{
+    "wordplay_analysis": "Checked for name combinations, found: ...",
+    "fill_in_blank_check": "Looked for ___ patterns, found: ...",
+    "semantic_groups": "Found these thematic connections: ..."
+  }},
   "groups": [
     {{
       "words": ["WORD1", "WORD2", "WORD3", "WORD4"],
       "category": "CATEGORY_NAME",
-      "explanation": "Why these words belong together",
+      "explanation": "Detailed explanation of why these words belong together",
       "confidence": 0.95
     }},
-    ...
+    {{
+      "words": ["WORD5", "WORD6", "WORD7", "WORD8"],
+      "category": "CATEGORY_NAME",
+      "explanation": "...",
+      "confidence": 0.90
+    }},
+    {{
+      "words": ["WORD9", "WORD10", "WORD11", "WORD12"],
+      "category": "CATEGORY_NAME",
+      "explanation": "...",
+      "confidence": 0.85
+    }},
+    {{
+      "words": ["WORD13", "WORD14", "WORD15", "WORD16"],
+      "category": "CATEGORY_NAME",
+      "explanation": "...",
+      "confidence": 0.80
+    }}
   ]
 }}
 
-Make sure all 16 words are used exactly once across the 4 groups."""
+CRITICAL: 
+- Return exactly 4 groups
+- Use all 16 words exactly once
+- Only use high confidence (0.8+) if you're very certain
+- Purple categories usually have lower confidence (0.6-0.8)
+- Yellow categories should have high confidence (0.85+)
+- Be honest about uncertainty"""
 
     try:
-        print("Calling GPT-4 to solve puzzle...")
+        print("Calling GPT-4 to solve puzzle...", file=sys.stderr)
         
         # Call GPT-4 with Chain of Thought prompting
         # Use gpt-4-turbo or gpt-4o which support JSON mode, fallback to gpt-4 without JSON mode
@@ -97,21 +197,21 @@ Make sure all 16 words are used exactly once across the 4 groups."""
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                temperature=0.3,  # Lower temperature for consistency
+                temperature=0.4,  # Slightly higher for creative wordplay detection
                 response_format={"type": "json_object"},  # Request JSON output
-                max_tokens=2000
+                max_tokens=2500
             )
         except Exception as e:
             # Fallback to gpt-4 without JSON mode
             if "json_object" in str(e).lower() or "response_format" in str(e).lower():
-                print("JSON mode not supported, using gpt-4 without JSON mode...")
+                print("JSON mode not supported, using gpt-4 without JSON mode...", file=sys.stderr)
                 response = client.chat.completions.create(
                     model="gpt-4",
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt}
                     ],
-                    temperature=0.3,  # Lower temperature for consistency
+                    temperature=0.4,  # Slightly higher for creative wordplay detection
                     max_tokens=2000
                 )
             else:
@@ -120,7 +220,7 @@ Make sure all 16 words are used exactly once across the 4 groups."""
         # Extract the response content
         content = response.choices[0].message.content
         
-        print("GPT-4 response received, parsing...")
+        print("GPT-4 response received, parsing...", file=sys.stderr)
         
         # Parse JSON response
         try:
@@ -185,13 +285,13 @@ Make sure all 16 words are used exactly once across the 4 groups."""
             
             # Validate we have exactly 4 groups and all words are used
             if len(results) != 4:
-                print(f"Warning: Expected 4 groups, got {len(results)}")
+                print(f"Warning: Expected 4 groups, got {len(results)}", file=sys.stderr)
             
             if len(used_words) != 16:
                 missing = set(words) - used_words
-                print(f"Warning: Not all words used. Missing: {missing}")
+                print(f"Warning: Not all words used. Missing: {missing}", file=sys.stderr)
             
-            print(f"Successfully parsed {len(results)} groups from GPT-4")
+            print(f"Successfully parsed {len(results)} groups from GPT-4", file=sys.stderr)
             return results
             
         except json.JSONDecodeError as e:

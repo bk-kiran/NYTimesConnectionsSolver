@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Sparkles, Loader2, X, Clock, ChevronDown, ChevronUp } from 'lucide-react';
 import * as Switch from '@radix-ui/react-switch';
 import { clsx } from 'clsx';
@@ -13,6 +13,7 @@ interface Prediction {
   explanation?: string | null;
   method?: string;
   sources?: string[];
+  difficulty?: string;  // yellow, green, blue, purple
 }
 
 interface SolverProps {
@@ -23,23 +24,54 @@ interface SolverProps {
 }
 
 export default function Solver({ words, puzzleId, puzzleDate, onPredictionsChange }: SolverProps) {
-  const [predictions, setPredictions] = useState<Prediction[]>([]);
+  const [topSolution, setTopSolution] = useState<Prediction[]>([]);  // Guaranteed 4 groups
+  const [allPredictions, setAllPredictions] = useState<Prediction[]>([]);  // All predictions
   const [excludedPredictions, setExcludedPredictions] = useState<Prediction[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [useLLM, setUseLLM] = useState<boolean>(false);
   const [solveTime, setSolveTime] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showExcluded, setShowExcluded] = useState<boolean>(false);
+  const [allWordsCovered, setAllWordsCovered] = useState<boolean>(false);
+  
+  // Track previous puzzle ID to detect when puzzle changes
+  const prevPuzzleIdRef = useRef<number | null>(null);
+  
+  // Reset solver state when puzzle changes
+  useEffect(() => {
+    if (prevPuzzleIdRef.current !== null && prevPuzzleIdRef.current !== puzzleId) {
+      // Puzzle changed - reset all state
+      console.log(`Puzzle changed from ${prevPuzzleIdRef.current} to ${puzzleId}, resetting solver state`);
+      setTopSolution([]);
+      setAllPredictions([]);
+      setExcludedPredictions([]);
+      setSolveTime(null);
+      setError(null);
+      setShowExcluded(false);
+      setAllWordsCovered(false);
+      
+      // Notify parent that predictions are cleared
+      if (onPredictionsChange) {
+        onPredictionsChange([]);
+      }
+    }
+    prevPuzzleIdRef.current = puzzleId;
+  }, [puzzleId, onPredictionsChange]);
 
   const solvePuzzle = async () => {
     if (!words || words.length !== 16) {
-      const errorMsg = 'Invalid words: Must have exactly 16 words';
+      const errorMsg = `Invalid words: Expected 16 words, got ${words?.length || 0}. Words: ${words?.join(', ') || 'none'}`;
+      console.error('Solver error:', errorMsg);
       setError(errorMsg);
       toast.error('Invalid input', {
         description: errorMsg,
       });
       return;
     }
+    
+    // Debug: Log the words being sent
+    console.log('Solving puzzle with words:', words);
+    console.log('Puzzle ID:', puzzleId);
 
     setLoading(true);
     setError(null);
@@ -52,6 +84,13 @@ export default function Solver({ words, puzzleId, puzzleDate, onPredictionsChang
     try {
       // Collect exclude_words from excludedPredictions (flatten all words)
       const excludeWords = excludedPredictions.flatMap(pred => pred.words);
+
+      // Debug: Log what we're sending
+      console.log('Sending solve request:', {
+        wordsCount: words.length,
+        use_llm: useLLM,
+        excludeWordsCount: excludeWords.length,
+      });
 
       const response = await fetch('/api/solve', {
         method: 'POST',
@@ -74,39 +113,29 @@ export default function Solver({ words, puzzleId, puzzleDate, onPredictionsChang
       // Dismiss loading toast
       toast.dismiss(loadingToastId);
       
-      // Merge new predictions with existing ones (don't overwrite)
-      // Only add predictions that don't overlap with existing predictions
-      const newPredictions = data.predictions || [];
-      const existingWords = new Set(
-        predictions.flatMap(pred => pred.words.map(w => w.toUpperCase()))
-      );
+      // Handle new response format with top_solution and all_predictions
+      const topSolution = data.top_solution || data.predictions?.slice(0, 4) || [];
+      const allPredictions = data.all_predictions || data.predictions || [];
+      const allWordsCovered = data.all_words_covered !== undefined ? data.all_words_covered : false;
       
-      // Filter out new predictions that overlap with existing ones
-      const uniqueNewPredictions = newPredictions.filter(newPred => {
-        const newWords = new Set(newPred.words.map(w => w.toUpperCase()));
-        // Check if any word from new prediction is already in existing predictions
-        return !Array.from(newWords).some(word => existingWords.has(word));
-      });
-      
-      // Combine existing predictions with new unique ones
-      const mergedPredictions = [...predictions, ...uniqueNewPredictions];
-      
-      setPredictions(mergedPredictions);
+      setTopSolution(topSolution);
+      setAllPredictions(allPredictions);
+      setAllWordsCovered(allWordsCovered);
       setSolveTime(data.solve_time_ms || null);
       
-      // Notify parent component of predictions change
+      // Notify parent component of predictions change (use top solution)
       if (onPredictionsChange) {
-        onPredictionsChange(mergedPredictions);
+        onPredictionsChange(topSolution);
       }
       
       // Show success toast
-      if (uniqueNewPredictions.length > 0) {
-        toast.success('New predictions found!', {
-          description: `Added ${uniqueNewPredictions.length} new group${uniqueNewPredictions.length > 1 ? 's' : ''} (${mergedPredictions.length} total) in ${(data.solve_time_ms / 1000).toFixed(1)}s`,
+      if (allWordsCovered) {
+        toast.success('Complete solution found!', {
+          description: `Found 4 groups covering all 16 words in ${(data.solve_time_ms / 1000).toFixed(1)}s`,
         });
       } else {
-        toast.info('No new groups found', {
-          description: `All predictions overlap with existing groups. Try excluding more words.`,
+        toast.success('Solution found!', {
+          description: `Found ${topSolution.length} groups in ${(data.solve_time_ms / 1000).toFixed(1)}s`,
         });
       }
     } catch (err) {
@@ -115,7 +144,9 @@ export default function Solver({ words, puzzleId, puzzleDate, onPredictionsChang
       
       const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
       setError(errorMessage);
-      setPredictions([]);
+      setTopSolution([]);
+      setAllPredictions([]);
+      setAllWordsCovered(false);
       setSolveTime(null);
       
       // Notify parent that predictions are cleared
@@ -136,19 +167,26 @@ export default function Solver({ words, puzzleId, puzzleDate, onPredictionsChang
     // Add to excluded
     setExcludedPredictions(prev => [...prev, prediction]);
     
-    // Remove from predictions
-    const updatedPredictions = predictions.filter(pred => {
-      // Compare word arrays (order-independent)
+    // Remove from top solution
+    const updatedTopSolution = topSolution.filter(pred => {
       const predWords = pred.words.map(w => w.toUpperCase()).sort().join(',');
       const excludedWords = prediction.words.map(w => w.toUpperCase()).sort().join(',');
       return predWords !== excludedWords;
     });
     
-    setPredictions(updatedPredictions);
+    // Remove from all predictions
+    const updatedAllPredictions = allPredictions.filter(pred => {
+      const predWords = pred.words.map(w => w.toUpperCase()).sort().join(',');
+      const excludedWords = prediction.words.map(w => w.toUpperCase()).sort().join(',');
+      return predWords !== excludedWords;
+    });
+    
+    setTopSolution(updatedTopSolution);
+    setAllPredictions(updatedAllPredictions);
     
     // Notify parent of updated predictions
     if (onPredictionsChange) {
-      onPredictionsChange(updatedPredictions);
+      onPredictionsChange(updatedTopSolution);
     }
   };
 
@@ -288,31 +326,44 @@ export default function Solver({ words, puzzleId, puzzleDate, onPredictionsChang
         </div>
       )}
 
-      {/* Results Section */}
-      {predictions.length > 0 && (
-        <div className="mb-6">
+      {/* Top Solution Section */}
+      {topSolution.length > 0 && (
+        <div className="mb-8">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-xl font-semibold text-gray-800">
-              Top Predictions
-            </h3>
-            <span className="bg-blue-100 text-blue-800 text-sm font-medium px-3 py-1 rounded-full">
-              {predictions.length}
+            <div className="flex items-center gap-3">
+              <h2 className="text-2xl font-bold text-gray-800">
+                Recommended Solution
+              </h2>
+              {allWordsCovered && (
+                <span className="bg-green-100 text-green-800 text-xs font-semibold px-2 py-1 rounded-full">
+                  ✓ Uses all 16 words
+                </span>
+              )}
+            </div>
+            <span className="bg-green-100 text-green-800 text-sm font-medium px-3 py-1 rounded-full">
+              {topSolution.length} groups
             </span>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {predictions.map((prediction, index) => {
+            {topSolution.map((prediction, index) => {
               const { percentage, bgColor, label } = getConfidenceBadge(prediction.confidence);
               
               return (
                 <div
                   key={index}
                   className={clsx(
-                    'bg-white border rounded-lg shadow-sm p-4',
+                    'bg-white rounded-lg shadow-sm p-4',
                     'relative transition-all duration-200',
-                    'hover:scale-[1.02] hover:shadow-md'
+                    'hover:scale-[1.02] hover:shadow-md',
+                    // Green border for top solution
+                    'border-2 border-green-500'
                   )}
                 >
+                  {/* Recommended Badge */}
+                  <div className="absolute top-2 left-2 bg-green-600 text-white text-[10px] font-semibold px-2 py-0.5 rounded">
+                    Recommended
+                  </div>
                   {/* Confidence Badge */}
                   <div className={clsx(
                     'absolute top-3 right-3',
@@ -325,9 +376,22 @@ export default function Solver({ words, puzzleId, puzzleDate, onPredictionsChang
                   {/* Category - Only available when using GPT-4 */}
                   {prediction.category && (
                     <div className="mb-3 pr-20">
-                      <h4 className="text-lg font-bold text-gray-900">
-                        {prediction.category}
-                      </h4>
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-lg font-bold text-gray-900">
+                          {prediction.category}
+                        </h4>
+                        {prediction.difficulty && (
+                          <span className={clsx(
+                            'text-xs font-semibold px-2 py-0.5 rounded',
+                            prediction.difficulty === 'yellow' && 'bg-yellow-100 text-yellow-800',
+                            prediction.difficulty === 'green' && 'bg-green-100 text-green-800',
+                            prediction.difficulty === 'blue' && 'bg-blue-100 text-blue-800',
+                            prediction.difficulty === 'purple' && 'bg-purple-100 text-purple-800'
+                          )}>
+                            {prediction.difficulty.toUpperCase()}
+                          </span>
+                        )}
+                      </div>
                       {useLLM && (
                         <p className="text-xs text-blue-600 font-medium mt-1">
                           GPT-4 Category Prediction
@@ -474,7 +538,7 @@ export default function Solver({ words, puzzleId, puzzleDate, onPredictionsChang
       )}
 
       {/* Empty State */}
-      {!loading && predictions.length === 0 && !error && (
+      {!loading && topSolution.length === 0 && !error && (
         <div className="text-center py-12 text-gray-500">
           <Sparkles className="w-12 h-12 mx-auto mb-4 opacity-50" />
           <p>Click "Solve Puzzle" to get AI-powered predictions</p>

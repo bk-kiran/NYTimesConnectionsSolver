@@ -9,6 +9,7 @@ from itertools import combinations
 from sentence_transformers import SentenceTransformer
 from typing import List, Dict, Any
 import warnings
+import sys
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
@@ -21,9 +22,9 @@ def _get_model():
     """Get or load the sentence transformer model (cached globally)"""
     global _model
     if _model is None:
-        print("Loading sentence-transformers model 'all-mpnet-base-v2'...")
+        print("Loading sentence-transformers model 'all-mpnet-base-v2'...", file=sys.stderr)
         _model = SentenceTransformer('all-mpnet-base-v2')
-        print("Model loaded successfully!")
+        print("Model loaded successfully!", file=sys.stderr)
     return _model
 
 
@@ -68,14 +69,15 @@ def solve_with_embeddings(words: List[str]) -> List[Dict[str, Any]]:
     model = _get_model()
     
     # Generate embeddings for all words (vectorized operation)
-    print(f"Generating embeddings for {len(words)} words...")
+    import sys
+    print(f"Generating embeddings for {len(words)} words...", file=sys.stderr)
     embeddings = model.encode(words, show_progress_bar=False)
     embeddings = np.array(embeddings)
     
     # Get all possible 4-word combinations
-    print("Calculating similarity scores for all 4-word combinations...")
+    print("Calculating similarity scores for all 4-word combinations...", file=sys.stderr)
     all_combinations = list(combinations(range(len(words)), 4))
-    print(f"Total combinations to evaluate: {len(all_combinations)}")
+    print(f"Total combinations to evaluate: {len(all_combinations)}", file=sys.stderr)
     
     results = []
     
@@ -104,7 +106,17 @@ def solve_with_embeddings(words: List[str]) -> List[Dict[str, Any]]:
                 pairwise_similarities.append(similarity)
             
             # Calculate average pairwise similarity (confidence score)
-            confidence = np.mean(pairwise_similarities)
+            # Also consider minimum similarity to ensure all pairs are reasonably similar
+            avg_similarity = np.mean(pairwise_similarities)
+            min_similarity = np.min(pairwise_similarities)
+            
+            # Combined confidence: weighted average with minimum threshold
+            # This penalizes groups where one pair is very dissimilar
+            confidence = (avg_similarity * 0.7) + (min_similarity * 0.3)
+            
+            # Additional penalty if minimum similarity is too low
+            if min_similarity < 0.3:
+                confidence *= 0.7  # Reduce confidence for weak connections
             
             # Get the actual words for this combination
             combo_words = [words[idx] for idx in combo_indices]
@@ -117,18 +129,59 @@ def solve_with_embeddings(words: List[str]) -> List[Dict[str, Any]]:
         
         # Progress update
         if (i + batch_size) % 5000 == 0:
-            print(f"Processed {min(i + batch_size, len(all_combinations))} combinations...")
+            import sys
+            print(f"Processed {min(i + batch_size, len(all_combinations))} combinations...", file=sys.stderr)
     
     # Sort by confidence (highest first)
     results.sort(key=lambda x: x['confidence'], reverse=True)
     
-    # Return top 20 predictions
-    top_20 = results[:20]
+    # Find non-overlapping groups to ensure better coverage
+    def find_non_overlapping_groups(all_combinations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Find top non-overlapping groups."""
+        selected_groups = []
+        used_words = set()
+        
+        for combo in all_combinations:  # Already sorted by confidence
+            words_in_combo = set(w.upper() for w in combo['words'])
+            
+            # Check if this group overlaps with already selected
+            if not words_in_combo.intersection(used_words):
+                selected_groups.append(combo)
+                used_words.update(words_in_combo)
+                
+            if len(selected_groups) >= 30:  # Get up to 30 non-overlapping
+                break
+        
+        return selected_groups
     
-    print(f"Top prediction confidence: {top_20[0]['confidence']:.4f}")
-    print(f"Returning top {len(top_20)} predictions")
+    # Get non-overlapping groups first
+    non_overlapping = find_non_overlapping_groups(results)
     
-    return top_20
+    # Also include top by confidence (even if overlapping) for more options
+    top_by_confidence = results[:30]
+    
+    # Merge and deduplicate
+    seen = set()
+    final_results = []
+    
+    # Add non-overlapping first (higher priority)
+    for pred in non_overlapping:
+        normalized = tuple(sorted(w.upper() for w in pred['words']))
+        if normalized not in seen:
+            seen.add(normalized)
+            final_results.append(pred)
+    
+    # Add top by confidence if not already included
+    for pred in top_by_confidence:
+        normalized = tuple(sorted(w.upper() for w in pred['words']))
+        if normalized not in seen and len(final_results) < 30:
+            seen.add(normalized)
+            final_results.append(pred)
+    
+    print(f"Top prediction confidence: {final_results[0]['confidence']:.4f}", file=sys.stderr)
+    print(f"Returning {len(final_results)} predictions ({len(non_overlapping)} non-overlapping)", file=sys.stderr)
+    
+    return final_results
 
 
 if __name__ == "__main__":
