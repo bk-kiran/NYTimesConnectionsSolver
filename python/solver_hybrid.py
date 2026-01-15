@@ -18,6 +18,15 @@ from python.solver_embeddings import solve_with_embeddings
 from python.solver_llm import solve_with_llm
 from python.wordplay_detector import analyze_all_wordplay
 from python.difficulty_predictor import add_difficulty_to_predictions
+from python.word_analyzer import analyze_all_words
+from python.group_validator import validate_group
+from python.constraint_solver import find_valid_solution
+from python.word_conflict_resolver import resolve_word_conflicts
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+logger = logging.getLogger(__name__)
 
 
 def _normalize_group(words: List[str]) -> tuple:
@@ -159,20 +168,65 @@ def solve_puzzle(
     import sys
     print("Starting hybrid solver...", file=sys.stderr)
     
-    # Step 0: Run wordplay analysis
-    print("\n[0/3] Analyzing wordplay patterns...", file=sys.stderr)
-    wordplay_findings = analyze_all_wordplay(words)
-    print(f"Wordplay analysis complete", file=sys.stderr)
+    # Step 0: Run comprehensive word analysis
+    print("\n[0/4] Analyzing all words for patterns...", file=sys.stderr)
+    word_analysis = analyze_all_words(words)
+    wordplay_findings = analyze_all_wordplay(words)  # Keep for backward compatibility
+    print(f"Word analysis complete", file=sys.stderr)
     
-    # Step 1: Always run embeddings solver (fast)
-    print("\n[1/3] Running embeddings solver...", file=sys.stderr)
+    # Step 1: Generate predictions from word analysis patterns
+    print("\n[1/4] Generating predictions from word patterns...", file=sys.stderr)
+    pattern_predictions = []
+    
+    # Generate predictions from fill-in-blank patterns
+    fill_before = word_analysis['cross_word_patterns'].get('fill_in_blank_before', {})
+    fill_after = word_analysis['cross_word_patterns'].get('fill_in_blank_after', {})
+    
+    for compound, word_list in fill_before.items():
+        if len(word_list) >= 4:
+            pattern_predictions.append({
+                'words': word_list[:4],
+                'confidence': 0.75,
+                'method': 'pattern',
+                'category': f"Words before '{compound}'",
+                'explanation': f"These words commonly precede '{compound}'",
+                'sources': ['word_analysis']
+            })
+    
+    for compound, word_list in fill_after.items():
+        if len(word_list) >= 4:
+            pattern_predictions.append({
+                'words': word_list[:4],
+                'confidence': 0.75,
+                'method': 'pattern',
+                'category': f"Words after '{compound}'",
+                'explanation': f"These words commonly follow '{compound}'",
+                'sources': ['word_analysis']
+            })
+    
+    # Generate predictions from name combinations
+    name_words = word_analysis['cross_word_patterns'].get('name_combinations', [])
+    if len(name_words) >= 4:
+        pattern_predictions.append({
+            'words': name_words[:4],
+            'confidence': 0.75,
+            'method': 'pattern',
+            'category': "Words with hidden names",
+            'explanation': "These words can be split into two names",
+            'sources': ['word_analysis']
+        })
+    
+    print(f"Pattern analysis found {len(pattern_predictions)} predictions", file=sys.stderr)
+    
+    # Step 2: Always run embeddings solver (fast)
+    print("\n[2/4] Running embeddings solver...", file=sys.stderr)
     embeddings_results = solve_with_embeddings(words)
     print(f"Embeddings solver found {len(embeddings_results)} predictions", file=sys.stderr)
     
-    # Step 2: Conditionally run LLM solver
+    # Step 3: Conditionally run LLM solver
     llm_results = []
     if use_llm:
-        print("\n[2/3] Running LLM solver...", file=sys.stderr)
+        print("\n[3/4] Running LLM solver...", file=sys.stderr)
         print(f"use_llm={use_llm}, api_key present={bool(api_key)}", file=sys.stderr)
         try:
             if not api_key:
@@ -186,7 +240,10 @@ def solve_puzzle(
             import traceback
             traceback.print_exc(file=sys.stderr)
     else:
-        print("\n[2/3] Skipping LLM solver (use_llm=False)", file=sys.stderr)
+        print("\n[3/4] Skipping LLM solver (use_llm=False)", file=sys.stderr)
+    
+    # Step 4: Validate all predictions
+    print("\n[4/4] Validating predictions...", file=sys.stderr)
     
     # Merge and rank predictions
     import sys
@@ -216,6 +273,24 @@ def solve_puzzle(
                 return True
         
         return False
+    
+    # Combine all predictions
+    all_raw_predictions = pattern_predictions + embeddings_results + llm_results
+    
+    # Process all predictions with validation
+    merged_predictions: Dict[tuple, Dict[str, Any]] = {}
+    
+    # Process pattern predictions first (they have high confidence for detected patterns)
+    for result in pattern_predictions:
+        normalized = _normalize_group(result['words'])
+        merged_predictions[normalized] = {
+            "words": result['words'],
+            "confidence": result.get('confidence', 0.75),
+            "method": result.get('method', 'pattern'),
+            "category": result.get('category'),
+            "explanation": result.get('explanation'),
+            "sources": result.get('sources', ['pattern'])
+        }
     
     # Process embeddings results with calibrated confidence
     min_embeddings_confidence = 0.4
@@ -305,8 +380,42 @@ def solve_puzzle(
                 "sources": ["wordplay"]
             }
     
-    # Convert to list and sort by confidence
+    # Convert to list and validate all predictions
     all_predictions = list(merged_predictions.values())
+    
+    # Validate predictions (limit to top 30 to speed up)
+    validated_predictions = []
+    predictions_to_validate = all_predictions[:30]  # Only validate top 30
+    
+    for pred in predictions_to_validate:
+        try:
+            validation = validate_group(
+                pred['words'],
+                pred.get('category', ''),
+                words,
+                other_groups=[p['words'] for p in predictions_to_validate if p != pred]
+            )
+            
+            # Combine original confidence with validation score
+            final_confidence = (
+                pred.get('confidence', 0.5) * 0.6 +  # Original confidence
+                validation['score'] * 0.4             # Validation score
+            )
+            
+            pred['validation_score'] = validation['score']
+            pred['validation_reasons'] = validation['reasons']
+            pred['final_confidence'] = final_confidence
+            pred['confidence'] = final_confidence  # Update main confidence
+            
+            validated_predictions.append(pred)
+        except Exception as e:
+            print(f"Warning: Could not validate prediction {pred.get('words', [])}: {e}", file=sys.stderr)
+            validated_predictions.append(pred)  # Include anyway with original confidence
+    
+    # Add remaining predictions without validation (for speed)
+    validated_predictions.extend(all_predictions[30:])
+    
+    all_predictions = validated_predictions
     
     # Apply overlap penalties
     for i, pred1 in enumerate(all_predictions):
@@ -323,24 +432,55 @@ def solve_puzzle(
                 else:
                     pred1['confidence'] *= 0.7  # 30% penalty
     
-    # Re-sort after penalties
-    all_predictions.sort(key=lambda x: x['confidence'], reverse=True)
+    # Re-sort after penalties and validation
+    all_predictions.sort(key=lambda x: x.get('final_confidence', x.get('confidence', 0)), reverse=True)
     
     print(f"Total unique predictions after merging: {len(all_predictions)}", file=sys.stderr)
     print(f"LLM results count: {len(llm_results)}, Embeddings results count: {len(embeddings_results)}", file=sys.stderr)
     
     # Find best 4-group solution that uses all 16 words
-    best_4_groups = find_best_solution(all_predictions, words)
+    best_4_groups = find_valid_solution(all_predictions, set(words))
     all_words_covered = False
     
     if best_4_groups:
         # Found valid 4-group solution
-        all_words_covered = True
-        print(f"Found valid 4-group solution covering all 16 words", file=sys.stderr)
+        logger.info(f"Found solution with {len(best_4_groups)} groups")
         
-        # Diversity bonus: boost all by 5%
-        for pred in best_4_groups:
-            pred['confidence'] = min(0.98, pred['confidence'] * 1.05)
+        # Verify solution
+        all_solution_words = set()
+        for i, group in enumerate(best_4_groups):
+            all_solution_words.update(w.upper() for w in group['words'])
+            logger.info(f"Group {i+1}: {group['words']} - {group.get('category', 'N/A')}")
+        
+        missing = set(w.upper() for w in words) - all_solution_words
+        extra = all_solution_words - set(w.upper() for w in words)
+        
+        if missing:
+            logger.error(f"MISSING WORDS: {missing}")
+        if extra:
+            logger.error(f"EXTRA WORDS: {extra}")
+        if len(all_solution_words) != 16:
+            logger.error(f"Word count: {len(all_solution_words)} (should be 16)")
+        
+        # Fix word conflicts if any
+        if missing or extra or len(all_solution_words) != 16:
+            logger.info("Resolving word conflicts...")
+            best_4_groups = resolve_word_conflicts(best_4_groups, set(words))
+        
+        # Re-verify after conflict resolution
+        all_solution_words = set()
+        for group in best_4_groups:
+            all_solution_words.update(w.upper() for w in group['words'])
+        
+        if all_solution_words == set(w.upper() for w in words) and len(all_solution_words) == 16:
+            all_words_covered = True
+            print(f"Found valid 4-group solution covering all 16 words", file=sys.stderr)
+            
+            # Diversity bonus: boost all by 5%
+            for pred in best_4_groups:
+                pred['confidence'] = min(0.98, pred.get('confidence', 0.5) * 1.05)
+        else:
+            logger.warning("Solution still has word conflicts after resolution")
     else:
         # Fallback: Get top 4 non-overlapping predictions
         print("Warning: No perfect 4-group solution found, using top 4 by confidence", file=sys.stderr)

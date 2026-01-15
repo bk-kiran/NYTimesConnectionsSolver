@@ -37,66 +37,145 @@ def solve_with_llm(words: List[str], api_key: str, wordplay_findings: Optional[D
     # Set up OpenAI client
     client = openai.OpenAI(api_key=api_key)
     
-    # System prompt explaining Connections rules with detailed category types
-    category_examples = """
-CATEGORY TYPES (in order of difficulty):
+    system_prompt = """You are an expert NYT Connections puzzle solver.
 
-YELLOW (Easiest - Direct semantic):
-- Clear categorical relationships
-- Example: "GARDENING TOOLS: rake, shovel, spade, hose"
-- Example: "SYNONYMS FOR FAST: quick, rapid, speedy, swift"
-- High semantic similarity, obvious connection
+NYT Connections categories fall into these types (check ALL for every puzzle):
 
-GREEN (Moderate - Thematic):
-- Shared characteristics or themes
-- Example: "THINGS THAT ARE RED: apple, rose, fire truck, tomato"
-- Example: "WINTER WORDS: snow, ice, cold, frost"
-- Medium semantic similarity, thematic grouping
+1. PHYSICAL PROPERTIES (common in easier categories):
+   - Form/Shape: "comes in [form]" (bars, flakes, cubes, rings, balls, strips)
+   - State: physical states (solid, liquid, frozen, melted)
+   - Texture: (smooth, rough, soft, hard, sticky, dry)
+   - Size: (small, large, tiny, massive)
+   - NOT just "things that CAN BE X" - look for INHERENT properties
 
-BLUE (Tricky - Wordplay or fill-in-blank):
-- Fill in the blank: "_____ ring: boxing, wedding, onion, earring"
-- Compound words: Words that go before/after common word
-- Example: "WORDS BEFORE 'BALL': basket, foot, snow, eye"
-- Example: "WORDS AFTER 'FIRE': place, fighter, works, escape"
-- Lower semantic similarity, pattern-based
+2. VISUAL/SENSORY (common in easier categories):
+   - Color categories: "things that are [color]" (red, white, black, gold)
+   - Sounds: (loud, quiet, musical, animal sounds)
+   - Smell/Taste: (sweet, sour, bitter, fragrant)
 
-PURPLE (Hardest - Obscure wordplay):
-- Hidden patterns, homophones, word fragments
-- Words split into parts: "JACK + AL = JACKAL"
-- Rhymes, anagrams, or cultural references
-- Example: "WORDS FORMED BY TWO MEN'S NAMES: Jackal (Jack+Al), Patron (Pat+Ron), Levitate (Levi+Tate), Melted (Mel+Ted)"
-- Very low semantic similarity, requires wordplay analysis
-"""
+3. CATEGORICAL (common in medium difficulty):
+   - Types of X: "types of [noun]" (dogs, cars, trees, dances, sports)
+   - Parts of X: "parts of [object]" (car parts, body parts, building parts)
+   - Tools/Equipment: "used for [purpose]" (cleaning, cooking, gardening)
+   - Professions, animals, foods, places, etc.
 
-    system_prompt = f"""You are an expert at solving NYT Connections puzzles.
+4. FUNCTIONAL (common in medium difficulty):
+   - Actions: "things you can [verb]" (throw, eat, wear, ride)
+   - Purpose: "used for [purpose]" (transportation, communication)
+   - Location: "found in [place]" (kitchen, office, nature)
 
-CRITICAL: Purple categories often use WORDPLAY, not just meaning:
-- Names hidden in words (JACKAL = JACK + AL)
-- Fill-in-blank patterns (___ button, ___ code)
-- Homophones or rhymes
-- Word fragments or compound words
+5. FILL-IN-BLANK (common in tricky categories):
+   - Before: "[WORD] ___" (fire, water, snow, sun + truck/fall/board/etc)
+   - After: "___ [WORD]" (various words + bar/ball/board/room)
+   - Both: "___ [WORD] ___"
 
-For each word, ask:
-1. Can it be split into two parts that are names/words?
-2. Does it fit a ___ [WORD] or [WORD] ___ pattern?
-3. Is there wordplay beyond literal meaning?
+6. WORDPLAY (common in hardest categories):
+   - Hidden names: word contains two names (JACKAL = JACK+AL, MATRIX = MAT+RIX)
+   - Homophones: words that sound like other words
+   - Anagrams: words that rearrange to form other words
+   - Rhymes: words that rhyme with something specific
+   - Word within word: larger word contains smaller word
+   - Synonyms for the same homophone (words that sound like "see": sea, C, etc.)
 
-{category_examples}
+7. LINGUISTIC PATTERNS (common in tricky categories):
+   - Same prefix: words starting with same letters (UN-, RE-, PRE-)
+   - Same suffix: words ending with same letters (-ING, -TION, -LY)
+   - Letter patterns: words with double letters, palindromes
+   - Length: words with same number of letters
 
-Think step-by-step:
-1. List all 16 words
-2. Check each word for wordplay patterns FIRST (names, compounds, fill-in-blank)
-3. Look for fill-in-blank patterns
-4. Find name combinations (e.g., LEVITATE = LEVI + TATE)
-5. Then find semantic groups
-6. Rank by confidence (Purple is usually lowest confidence, Yellow highest)
+8. ASSOCIATION/SEQUENCE (common in tricky categories):
+   - "___ and ___" pairs: common word pairings (salt and ___, black and ___)
+   - Sequences: (first, second, third), (Monday, Tuesday, etc.)
+   - Pop culture: movie titles, song lyrics, famous quotes
+   - Idioms: words that complete common phrases
 
-CRITICAL RULES:
-- There are EXACTLY 4 groups of 4 words each (16 words total)
-- Each word is used EXACTLY ONCE across all 4 groups
-- Each group shares a STRONG, CLEAR connection
-- Be skeptical of weak connections - lower confidence if unsure
-- Purple categories are often the trickiest - look for wordplay first!"""
+9. ABSTRACT/THEMATIC (any difficulty):
+   - Emotional: feelings, moods, attitudes
+   - Temporal: related to time, seasons, eras
+   - Mathematical: numbers, shapes, operations
+   - Conceptual: abstract ideas with subtle connections
+
+SOLVING PROCESS (follow for EVERY puzzle):
+
+Step 1: ANALYZE EACH WORD
+For each of the 16 words, consider:
+- Physical form and properties
+- Multiple meanings (literal vs. figurative)
+- Can it be split into parts? (names, words, syllables)
+- What words come before/after it commonly?
+- What category does it belong to?
+- Are there homophones or rhymes?
+
+Step 2: CHECK ALL PATTERN TYPES
+Go through ALL 9 category types above
+Don't stop at first connection - explore all possibilities
+A word like "STILL" could mean: unmoving (adjective), yet/nevertheless (adverb), photograph (noun), or distillery (noun)
+
+Step 3: PRIORITIZE SPECIFIC OVER GENERAL
+"Things that come in flakes" > "Things that can be white"
+"Kitchen appliances" > "Things found in homes"
+"Unmoving" > "Words related to motion"
+Be as SPECIFIC and CONCRETE as possible
+
+Step 4: VALIDATE CONNECTIONS
+Each group must have ONE clear, specific connection
+All 4 words should fit EQUALLY well (no forced inclusions)
+Connection should be verifiable and objective
+
+Step 5: RETURN 4 DISTINCT GROUPS
+Each word used exactly once
+Clear category name (1-3 words when possible)
+Brief explanation of the connection
+
+CRITICAL VALIDATION RULES:
+
+1. WORD EXCLUSIVITY:
+   - Each word belongs to EXACTLY ONE group
+   - Do NOT use the same word in multiple groups
+   - If a word could fit multiple categories, choose the BEST fit only
+
+2. COMPLETE COVERAGE:
+   - You must use ALL 16 words exactly once
+   - After creating 4 groups, verify: 4 groups × 4 words = 16 total words
+   - No word should be left out or duplicated
+
+3. VERIFICATION CHECKLIST:
+   Before returning your answer, verify:
+   ☑ Each group has exactly 4 words
+   ☑ All 16 words are used (no missing words)
+   ☑ No word appears twice (no duplicates)
+   ☑ Each group has a clear, specific connection
+   
+4. If you notice a word fits multiple groups:
+   - Choose the MOST SPECIFIC connection
+   - "FROZEN" fits "states of water" AND "unmoving" → Choose "unmoving" (more specific)
+   - "SALT" fits "white things" AND "comes in flakes" → Choose "comes in flakes" (physical form)
+
+5. Priority order for category selection:
+   a) Wordplay patterns (names, compounds) - highest priority for purple
+   b) Physical properties (form, state) - very concrete
+   c) Fill-in-blank patterns - specific and verifiable
+   d) Categorical (types of X) - clear membership
+   e) Thematic/associative - use only when others don't work
+
+Example of CORRECT solving process:
+
+Words: FROZEN, STATIC, STILL, STATIONARY, SALT, SNOW, CEREAL, DANDRUFF, ...
+
+Step 1: Identify FROZEN could mean:
+- State of water (physical state)
+- Unmoving (not moving)
+→ Choose "unmoving" because it's alongside STATIC, STILL, STATIONARY
+
+Step 2: Identify SALT could mean:
+- White substance
+- Comes in flakes/crystals
+→ Choose "comes in flakes" because SNOW, CEREAL, DANDRUFF also come in flakes
+
+Step 3: Verify final groups don't overlap
+✓ Group 1: FROZEN, STATIC, STILL, STATIONARY (unmoving)
+✓ Group 2: SALT, SNOW, CEREAL, DANDRUFF (comes in flakes)
+✓ No word used twice"""
 
     # User prompt with the words and wordplay analysis
     wordplay_section = ""
@@ -121,56 +200,42 @@ Words: {', '.join(words)}
 
 {wordplay_section}
 
-Rules:
-- Find exactly 4 groups
-- Each group has exactly 4 words  
-- Every word used exactly once
-- Groups should have clear connections
+Follow the SOLVING PROCESS from the system prompt:
+1. Analyze each word for ALL possible properties and meanings
+2. Check ALL 9 category types systematically
+3. Prioritize specific, concrete connections
+4. Validate that all 4 words fit equally well
+5. Return exactly 4 groups using all 16 words once
 
-Example of a tricky purple category:
-Words: JACKAL, LEVITATE, MELTED, PATRON
-Answer: "WORDS FORMED BY TWO MEN'S NAMES"
-- JACKAL = JACK + AL
-- LEVITATE = LEVI + TATE  
-- MELTED = MEL + TED
-- PATRON = PAT + RON
-
-Think step-by-step:
-1. Check for wordplay FIRST (names in words, fill-in-blank, compounds)
-2. Find thematic connections (colors, tools, types of X)
-3. Find semantic connections (synonyms, related concepts)
-4. Verify: All 16 words used exactly once across 4 groups
-
-Return JSON:
+Return JSON format:
 {{
-  "reasoning": {{
-    "wordplay_analysis": "Checked for name combinations, found: ...",
-    "fill_in_blank_check": "Looked for ___ patterns, found: ...",
-    "semantic_groups": "Found these thematic connections: ..."
-  }},
   "groups": [
     {{
       "words": ["WORD1", "WORD2", "WORD3", "WORD4"],
-      "category": "CATEGORY_NAME",
-      "explanation": "Detailed explanation of why these words belong together",
+      "category": "Specific Category Name",
+      "explanation": "Why these 4 words connect",
+      "category_type": "physical_property|categorical|fill_in_blank|wordplay|linguistic|association|abstract",
       "confidence": 0.95
     }},
     {{
       "words": ["WORD5", "WORD6", "WORD7", "WORD8"],
-      "category": "CATEGORY_NAME",
+      "category": "Specific Category Name",
       "explanation": "...",
+      "category_type": "...",
       "confidence": 0.90
     }},
     {{
       "words": ["WORD9", "WORD10", "WORD11", "WORD12"],
-      "category": "CATEGORY_NAME",
+      "category": "Specific Category Name",
       "explanation": "...",
+      "category_type": "...",
       "confidence": 0.85
     }},
     {{
       "words": ["WORD13", "WORD14", "WORD15", "WORD16"],
-      "category": "CATEGORY_NAME",
+      "category": "Specific Category Name",
       "explanation": "...",
+      "category_type": "...",
       "confidence": 0.80
     }}
   ]
@@ -179,10 +244,10 @@ Return JSON:
 CRITICAL: 
 - Return exactly 4 groups
 - Use all 16 words exactly once
+- Category names should be specific and concise (1-3 words)
 - Only use high confidence (0.8+) if you're very certain
 - Purple categories usually have lower confidence (0.6-0.8)
-- Yellow categories should have high confidence (0.85+)
-- Be honest about uncertainty"""
+- Yellow categories should have high confidence (0.85+)"""
 
     try:
         print("Calling GPT-4 to solve puzzle...", file=sys.stderr)
@@ -231,20 +296,20 @@ CRITICAL:
                 content = json_match.group(1)
             
             # Try to parse as JSON object first
-            parsed = json.loads(content)
+            parsed_data = json.loads(content)
             
             # Handle different response formats
-            if isinstance(parsed, dict):
+            if isinstance(parsed_data, dict):
                 # If it's a dict, look for 'groups' or use the dict itself
-                if 'groups' in parsed:
-                    groups = parsed['groups']
-                elif 'result' in parsed:
-                    groups = parsed['result']
+                if 'groups' in parsed_data:
+                    groups = parsed_data['groups']
+                elif 'result' in parsed_data:
+                    groups = parsed_data['result']
                 else:
                     # Assume the dict contains the groups as values
-                    groups = list(parsed.values()) if len(parsed) == 4 else [parsed]
-            elif isinstance(parsed, list):
-                groups = parsed
+                    groups = list(parsed_data.values()) if len(parsed_data) == 4 else [parsed_data]
+            elif isinstance(parsed_data, list):
+                groups = parsed_data
             else:
                 raise ValueError("Unexpected response format")
             
@@ -262,15 +327,16 @@ CRITICAL:
                     continue
                 
                 # Check for duplicates
-                if any(word in used_words for word in group_words):
+                if any(w.upper() in used_words for w in group_words):
                     continue
                 
-                used_words.update(group_words)
+                used_words.update(w.upper() for w in group_words)
                 
                 # Extract other fields
                 category = group.get('category', 'Unknown')
                 explanation = group.get('explanation', 'No explanation provided')
                 confidence = float(group.get('confidence', 0.8))
+                category_type = group.get('category_type', '')
                 
                 # Clamp confidence to 0-1 range
                 confidence = max(0.0, min(1.0, confidence))
@@ -280,16 +346,39 @@ CRITICAL:
                     "confidence": confidence,
                     "category": category,
                     "explanation": explanation,
+                    "category_type": category_type,
                     "method": "llm"
                 })
+            
+            # Validate response
+            validation = parsed_data.get('validation', {}) if isinstance(parsed_data, dict) else {}
+            total_words = validation.get('total_words', 0)
+            unique_words = validation.get('unique_words', 0)
+            all_words_used = validation.get('all_words_used', False)
+            no_duplicates = validation.get('no_duplicates', False)
             
             # Validate we have exactly 4 groups and all words are used
             if len(results) != 4:
                 print(f"Warning: Expected 4 groups, got {len(results)}", file=sys.stderr)
             
-            if len(used_words) != 16:
-                missing = set(words) - used_words
+            words_upper = set(w.upper() for w in words)
+            if used_words != words_upper:
+                missing = words_upper - used_words
                 print(f"Warning: Not all words used. Missing: {missing}", file=sys.stderr)
+            
+            # Check for duplicates
+            all_words_list = []
+            for result in results:
+                all_words_list.extend(w.upper() for w in result['words'])
+            
+            if len(all_words_list) != len(set(all_words_list)):
+                duplicates = [w for w in all_words_list if all_words_list.count(w) > 1]
+                print(f"Warning: Duplicate words found: {set(duplicates)}", file=sys.stderr)
+            
+            # Only accept if validation passes
+            if not (all_words_used and no_duplicates and total_words == 16 and unique_words == 16):
+                print(f"Warning: GPT-4 validation failed. all_words_used={all_words_used}, no_duplicates={no_duplicates}", file=sys.stderr)
+                # Still return results but with warning
             
             print(f"Successfully parsed {len(results)} groups from GPT-4", file=sys.stderr)
             return results

@@ -181,10 +181,10 @@ sys.stdout.flush()
         });
         
         // Set 60 second timeout (embeddings + LLM can take time)
-        const timeoutId = setTimeout(() => {
-          pythonProcess.kill();
-          reject(new Error('Request timeout after 60 seconds'));
-        }, 60000);
+            const timeoutId = setTimeout(() => {
+              pythonProcess.kill();
+              reject(new Error('Request timeout after 120 seconds'));
+            }, 120000); // Increased to 120 seconds for complex solving
         
         pythonProcess.on('close', (code) => {
           clearTimeout(timeoutId);
@@ -282,7 +282,7 @@ sys.stdout.flush()
         return NextResponse.json(
           {
             success: false,
-            error: 'Solver timeout: Request took longer than 30 seconds',
+            error: 'Solver timeout: Request took longer than 120 seconds',
           },
           { status: 504 }
         );
