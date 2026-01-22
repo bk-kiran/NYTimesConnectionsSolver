@@ -62,6 +62,7 @@ def fits_blank_pattern(word: str, group: Dict) -> bool:
 def calculate_word_fit_score(word: str, group: Dict) -> float:
     """
     Calculate how well a word fits a group's category.
+    Simplified version for speed (skips expensive embedding calculations).
     
     Args:
         word: Word to check
@@ -72,16 +73,22 @@ def calculate_word_fit_score(word: str, group: Dict) -> float:
     """
     score = 0.0
     
-    # Check semantic similarity with other words in group
+    # Skip expensive embedding calculations for speed
+    # Use simpler heuristics instead
     other_words = [w for w in group['words'] if w.upper() != word.upper()]
     if other_words:
-        try:
-            word_embedding = get_embedding(word)
-            group_embeddings = [get_embedding(w) for w in other_words]
-            similarities = [cosine_similarity(word_embedding, ge) for ge in group_embeddings]
-            score += np.mean(similarities) * 0.7
-        except Exception:
-            pass
+        # Simple heuristic: if word shares prefix/suffix with other words, it fits
+        word_upper = word.upper()
+        for other_word in other_words:
+            other_upper = other_word.upper()
+            # Check for shared prefix (first 3 chars)
+            if word_upper[:3] == other_upper[:3]:
+                score += 0.2
+            # Check for shared suffix (last 3 chars)
+            if len(word_upper) >= 3 and len(other_upper) >= 3:
+                if word_upper[-3:] == other_upper[-3:]:
+                    score += 0.2
+        score = min(0.5, score)  # Cap at 0.5 for this heuristic
     
     # Check if word matches group's category pattern
     category = group.get('category', '').lower()

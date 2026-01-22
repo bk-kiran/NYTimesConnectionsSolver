@@ -29,25 +29,30 @@ def find_valid_solution(all_predictions: List[Dict], all_words: Set[str]) -> Opt
         normalized_pred['words'] = [w.upper() for w in pred['words']]
         normalized_predictions.append(normalized_pred)
     
-    # Try all combinations of 4 predictions from top 20 (reduced from 30 for speed)
+    # Try all combinations of 4 predictions from top 12 (very aggressive for speed)
     best_solution = None
     best_score = -1
     
-    top_predictions = normalized_predictions[:20]  # Reduced from 30 to speed up
+    top_predictions = normalized_predictions[:12]  # Reduced to 12 for speed (C(12,4) = 495)
     
     if len(top_predictions) < 4:
         # Not enough predictions, use greedy approach
         return greedy_solution(normalized_predictions, all_words_upper)
     
-    # Limit combinations to avoid timeout (C(20,4) = 4,845 combinations)
+    # Limit combinations to avoid timeout
     import sys
     combo_count = 0
-    max_combos = 5000  # Limit to first 5000 combinations
+    max_combos = 1000  # Very aggressive limit to 1000 combinations
     
     for combo in itertools.combinations(top_predictions, 4):
         combo_count += 1
         if combo_count > max_combos:
             print(f"Reached combination limit ({max_combos}), using best found so far", file=sys.stderr)
+            break
+        
+        # Early exit if we found a perfect solution with high score
+        if best_solution and best_score > 2.5:  # Lower threshold for early exit
+            print(f"Found high-confidence solution early (score: {best_score:.2f})", file=sys.stderr)
             break
         # Extract all words from this combination
         words_in_combo = set()
@@ -83,6 +88,7 @@ def find_valid_solution(all_predictions: List[Dict], all_words: Set[str]) -> Opt
 def greedy_solution(all_predictions: List[Dict], all_words: Set[str]) -> List[Dict]:
     """
     Greedy algorithm to build a solution by selecting non-overlapping groups.
+    Optimized for speed.
     
     Args:
         all_predictions: List of all predictions (normalized to uppercase)
@@ -94,9 +100,9 @@ def greedy_solution(all_predictions: List[Dict], all_words: Set[str]) -> List[Di
     selected_groups = []
     used_words = set()
     
-    # Sort by confidence (highest first)
+    # Sort by confidence (highest first) - limit to top 30 for speed
     sorted_predictions = sorted(
-        all_predictions,
+        all_predictions[:30],  # Only consider top 30
         key=lambda x: x.get('final_confidence', x.get('confidence', 0)),
         reverse=True
     )
@@ -110,6 +116,9 @@ def greedy_solution(all_predictions: List[Dict], all_words: Set[str]) -> List[Di
             used_words.update(pred_words)
             
             if len(selected_groups) == 4:
+                # Check if we have all words
+                if used_words == all_words:
+                    return selected_groups
                 break
     
     # If we have exactly 4 groups using all 16 words, success

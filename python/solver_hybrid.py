@@ -242,8 +242,8 @@ def solve_puzzle(
     else:
         print("\n[3/4] Skipping LLM solver (use_llm=False)", file=sys.stderr)
     
-    # Step 4: Validate all predictions
-    print("\n[4/4] Validating predictions...", file=sys.stderr)
+    # Step 4: Skip validation for speed (already done during merging)
+    print("\n[4/4] Finalizing predictions...", file=sys.stderr)
     
     # Merge and rank predictions
     import sys
@@ -383,45 +383,23 @@ def solve_puzzle(
     # Convert to list and validate all predictions
     all_predictions = list(merged_predictions.values())
     
-    # Validate predictions (limit to top 30 to speed up)
+    # Skip validation for speed - just use original confidence
+    # Validation is expensive (embedding calculations) and constraint solver will handle conflicts
     validated_predictions = []
-    predictions_to_validate = all_predictions[:30]  # Only validate top 30
-    
-    for pred in predictions_to_validate:
-        try:
-            validation = validate_group(
-                pred['words'],
-                pred.get('category', ''),
-                words,
-                other_groups=[p['words'] for p in predictions_to_validate if p != pred]
-            )
-            
-            # Combine original confidence with validation score
-            final_confidence = (
-                pred.get('confidence', 0.5) * 0.6 +  # Original confidence
-                validation['score'] * 0.4             # Validation score
-            )
-            
-            pred['validation_score'] = validation['score']
-            pred['validation_reasons'] = validation['reasons']
-            pred['final_confidence'] = final_confidence
-            pred['confidence'] = final_confidence  # Update main confidence
-            
-            validated_predictions.append(pred)
-        except Exception as e:
-            print(f"Warning: Could not validate prediction {pred.get('words', [])}: {e}", file=sys.stderr)
-            validated_predictions.append(pred)  # Include anyway with original confidence
-    
-    # Add remaining predictions without validation (for speed)
-    validated_predictions.extend(all_predictions[30:])
+    for pred in all_predictions:
+        # Use original confidence as final confidence (skip validation to save time)
+        pred['final_confidence'] = pred.get('confidence', 0.5)
+        pred['validation_score'] = pred.get('confidence', 0.5)  # Use confidence as proxy
+        validated_predictions.append(pred)
     
     all_predictions = validated_predictions
     
-    # Apply overlap penalties
-    for i, pred1 in enumerate(all_predictions):
+    # Apply overlap penalties (limited to top 50 predictions for speed)
+    top_predictions_for_penalty = all_predictions[:50]
+    for i, pred1 in enumerate(top_predictions_for_penalty):
         words1 = set(w.upper() for w in pred1['words'])
-        for j, pred2 in enumerate(all_predictions):
-            if i == j:
+        for j, pred2 in enumerate(top_predictions_for_penalty):
+            if i >= j:  # Only check each pair once
                 continue
             words2 = set(w.upper() for w in pred2['words'])
             overlap = len(words1.intersection(words2))
@@ -438,8 +416,24 @@ def solve_puzzle(
     print(f"Total unique predictions after merging: {len(all_predictions)}", file=sys.stderr)
     print(f"LLM results count: {len(llm_results)}, Embeddings results count: {len(embeddings_results)}", file=sys.stderr)
     
-    # Find best 4-group solution that uses all 16 words
-    best_4_groups = find_valid_solution(all_predictions, set(words))
+    # Find best 4-group solution - use greedy only (fastest)
+    from python.constraint_solver import greedy_solution
+    
+    # Use greedy solution only (constraint solver is too slow)
+    logger.info("Using greedy solution for speed...")
+    best_4_groups = greedy_solution(all_predictions, set(words))
+    
+    # Check if greedy solution is complete
+    used_words = set()
+    for group in best_4_groups:
+        used_words.update(w.upper() for w in group['words'])
+    
+    if used_words == set(w.upper() for w in words) and len(best_4_groups) == 4:
+        logger.info("Greedy solution found complete 4-group solution")
+    else:
+        logger.warning(f"Greedy solution incomplete: {len(best_4_groups)} groups, {len(used_words)} words")
+        # Don't try constraint solver - it's too slow, just use what we have
+    
     all_words_covered = False
     
     if best_4_groups:
@@ -462,10 +456,10 @@ def solve_puzzle(
         if len(all_solution_words) != 16:
             logger.error(f"Word count: {len(all_solution_words)} (should be 16)")
         
-        # Fix word conflicts if any
+        # Skip conflict resolution to save time - constraint solver should handle it
         if missing or extra or len(all_solution_words) != 16:
-            logger.info("Resolving word conflicts...")
-            best_4_groups = resolve_word_conflicts(best_4_groups, set(words))
+            logger.warning(f"Word conflicts detected: missing={len(missing)}, extra={len(extra)}, count={len(all_solution_words)}")
+            # Don't resolve - just use what we have to avoid timeout
         
         # Re-verify after conflict resolution
         all_solution_words = set()

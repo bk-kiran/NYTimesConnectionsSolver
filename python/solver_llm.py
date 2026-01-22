@@ -207,6 +207,11 @@ Follow the SOLVING PROCESS from the system prompt:
 4. Validate that all 4 words fit equally well
 5. Return exactly 4 groups using all 16 words once
 
+MANDATORY: You MUST return exactly 4 groups with all 16 words.
+- If you're unsure about some words, still group them (use lower confidence)
+- Better to return 4 groups with some lower confidence than to return fewer groups
+- Every word must be assigned to exactly one group
+
 Return JSON format:
 {{
   "groups": [
@@ -241,13 +246,27 @@ Return JSON format:
   ]
 }}
 
-CRITICAL: 
-- Return exactly 4 groups
-- Use all 16 words exactly once
+CRITICAL REQUIREMENTS:
+- You MUST return exactly 4 groups
+- You MUST use all 16 words exactly once
+- If you cannot find a clear connection for some words, still group them (even with lower confidence)
 - Category names should be specific and concise (1-3 words)
 - Only use high confidence (0.8+) if you're very certain
 - Purple categories usually have lower confidence (0.6-0.8)
-- Yellow categories should have high confidence (0.85+)"""
+- Yellow categories should have high confidence (0.85+)
+
+VALIDATION BEFORE RETURNING:
+1. Count your groups: Should be exactly 4
+2. Count words in each group: Each should have exactly 4 words
+3. Count total words: Should be exactly 16 (4 groups × 4 words)
+4. Check for duplicates: No word should appear twice
+5. If any check fails, revise your groups until all pass
+
+If you're struggling to find 4 groups, use these strategies:
+- Look for weaker connections (lower confidence is OK)
+- Consider multiple meanings of words
+- Group remaining words even if connection is less obvious
+- Remember: It's better to return 4 groups (even with lower confidence) than to return fewer groups"""
 
     try:
         print("Calling GPT-4 to solve puzzle...", file=sys.stderr)
@@ -316,6 +335,7 @@ CRITICAL:
             # Validate and format the response
             results = []
             used_words = set()
+            words_upper = set(w.upper() for w in words)
             
             for group in groups:
                 if not isinstance(group, dict):
@@ -327,10 +347,11 @@ CRITICAL:
                     continue
                 
                 # Check for duplicates
-                if any(w.upper() in used_words for w in group_words):
+                group_words_upper = [w.upper() for w in group_words]
+                if any(w in used_words for w in group_words_upper):
                     continue
                 
-                used_words.update(w.upper() for w in group_words)
+                used_words.update(group_words_upper)
                 
                 # Extract other fields
                 category = group.get('category', 'Unknown')
@@ -358,13 +379,29 @@ CRITICAL:
             no_duplicates = validation.get('no_duplicates', False)
             
             # Validate we have exactly 4 groups and all words are used
-            if len(results) != 4:
-                print(f"Warning: Expected 4 groups, got {len(results)}", file=sys.stderr)
+            missing = words_upper - used_words
             
-            words_upper = set(w.upper() for w in words)
-            if used_words != words_upper:
-                missing = words_upper - used_words
-                print(f"Warning: Not all words used. Missing: {missing}", file=sys.stderr)
+            if len(results) != 4 or missing:
+                print(f"ERROR: GPT-4 returned {len(results)} groups, missing {len(missing)} words: {missing}", file=sys.stderr)
+                
+                # Create missing groups from unassigned words
+                while len(missing) > 0 and len(results) < 4:
+                    # Take up to 4 words from missing
+                    missing_list = list(missing)[:4]
+                    print(f"Creating group {len(results) + 1} from missing words: {missing_list}", file=sys.stderr)
+                    results.append({
+                        "words": missing_list,
+                        "confidence": 0.3,  # Low confidence for fallback group
+                        "category": f"Group {len(results) + 1}",
+                        "explanation": f"Group created from words not assigned by GPT-4: {', '.join(missing_list)}",
+                        "category_type": "unknown",
+                        "method": "llm"
+                    })
+                    used_words.update(w.upper() for w in missing_list)
+                    missing = words_upper - used_words
+                
+                if len(results) < 4:
+                    print(f"WARNING: Still have {len(results)} groups after fallback (should be 4)", file=sys.stderr)
             
             # Check for duplicates
             all_words_list = []
